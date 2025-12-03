@@ -92,7 +92,7 @@ void set_pca9685_pwm(uint8_t pwm_num, uint16_t on, uint16_t off){
 }
 
 void set_pca9685_pin(uint8_t pin_num, bool on_state){
-    set_pca9685_pwm(TB6612FNG_IN1, 0, on_state ? 4095 : 0);
+    set_pca9685_pwm(pin_num, 0, on_state ? 4095 : 0);
 }
 
 void setup_pca9685(){
