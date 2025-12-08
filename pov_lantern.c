@@ -103,7 +103,7 @@ void write_to_spi(const uint8_t *src, size_t len){
 }
 
 uint32_t get_dotstar_pixel_data(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
-    return ((brightness | 0xE0) << 24) | (red << 16) | (green << 8) | blue;
+    return ((((uint32_t) brightness) | 0xE0) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
 }
 
 void set_all_dotstar_pixels(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
@@ -112,7 +112,7 @@ void set_all_dotstar_pixels(uint8_t brightness, uint8_t red, uint8_t green, uint
     uint8_t pixels_data[pixel_data_length];
     uint32_t pixel_data = get_dotstar_pixel_data(brightness, red, green, blue);
     for (size_t i = 0; i < pixel_data_length; i++){
-        pixels_data[i] = pixel_data << ((i + 1) % 4) * 8;
+        pixels_data[i] = pixel_data >> (i % 4) * 8;
     }
     write_to_spi(pixels_data, pixel_data_length);
 }
@@ -185,7 +185,16 @@ int main(){
     set_pca9685_pin(TB6612FNG_IN1, clockwise);
     set_pca9685_pin(TB6612FNG_IN2, !clockwise);
 
-    set_all_dotstar_pixels(6, 0xFF, 0xFF, 0xFF);
+    // set_all_dotstar_pixels(6, 0xFF, 0xFF, 0xFF);
+
+    uint32_t pixel_data = get_dotstar_pixel_data(8 | 0xE0, 0xFF, 0xFF, 0xFF);
+    uint8_t pixel_buffer[4];
+    pixel_buffer[0] = pixel_data;
+    pixel_buffer[1] = pixel_data >> 8;
+    pixel_buffer[2] = pixel_data >> 16;
+    pixel_buffer[3] = pixel_data >> 24;
+
+    write_to_spi(pixel_buffer, 4);
 
     uint8_t index = 0;
     uint8_t registerOffset = 0x26;
