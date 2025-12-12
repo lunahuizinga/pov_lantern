@@ -197,20 +197,20 @@ int main(){
     write_to_spi(pixel_buffer, 4);
 
     uint8_t index = 0;
-    uint8_t registerOffset = 0x26;
+    uint8_t register_offset = 0x26;
 
-    bool lightStatus = false;
+    bool light_status = false;
 
     while (true) {
-        uint8_t registerIndex = registerOffset + index;
-        uint8_t register_value = read_pca9685_reg(registerIndex);
-        printf("Register %02x: %02x\n", registerIndex, register_value);
+        uint8_t register_index = register_offset + index;
+        uint8_t register_value = read_pca9685_reg(register_index);
+        printf("Register %02x: %02x\n", register_index, register_value);
 
         index++;
         index %= 4;
 
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, lightStatus);
-        lightStatus ^= true;
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
+        light_status ^= true;
 
         sleep_ms(500);
     }
