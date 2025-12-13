@@ -16,6 +16,8 @@
 #define DOTSTAR_HEIGHT 8
 #define DOTSTAR_WIDTH 8
 
+#define LED_FRAME_LENGTH 4
+
 // I2C defines
 // This example will use I2C0 on GPIO8 (SDA) and GPIO9 (SCL) running at 400KHz.
 // Pins can be changed, see the GPIO function select table in the datasheet for information on GPIO assignments
@@ -42,6 +44,8 @@
 #define TB6612FNG_IN1 0xa
 #define TB6612FNG_IN2 0x9
 #define TB6612FNG_PWM 0x8
+
+uint8_t dotstar_pixel_data[DOTSTAR_HEIGHT * DOTSTAR_WIDTH * 4];
 
 // PCA9685 abstraction functions
 void write_to_i2c(uint8_t addr, uint8_t *src, size_t len, bool nostop){
@@ -102,17 +106,43 @@ void write_to_spi(const uint8_t *src, size_t len){
     spi_write_blocking(SPI_PORT, src, len);
 }
 
-uint32_t get_dotstar_pixel_data(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
-    return ((((uint32_t) brightness) | 0xE0) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
+uint32_t format_dotstar_pixel_data(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
+    return ((((uint32_t) brightness) & 0x1F) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
+}
+
+void set_dotstar_pixel(uint8_t index, uint32_t pixel_data){
+    dotstar_pixel_data[index * LED_FRAME_LENGTH] = pixel_data;
+    dotstar_pixel_data[index * LED_FRAME_LENGTH + 1] = pixel_data >> 8;
+    dotstar_pixel_data[index * LED_FRAME_LENGTH + 2] = pixel_data >> 16;
+    dotstar_pixel_data[index * LED_FRAME_LENGTH + 3] = pixel_data >> 24;
+}
+
+void push_dotstar_pixels(){
+    uint8_t pixel_count = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
+    uint16_t pixel_data_length = (pixel_count + 2) * 4;
+    uint8_t pixel_data[pixel_data_length];
+    for (size_t i = 0; i < pixel_data_length; i++){
+        if(i < LED_FRAME_LENGTH || i >= (pixel_count + 1) * LED_FRAME_LENGTH){
+            pixel_data[i] = 0;
+            continue;
+        }
+        pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
+    }
+    write_to_spi(pixel_data, pixel_data_length);
 }
 
 void set_all_dotstar_pixels(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
     uint8_t pixel_count = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
-    uint8_t pixel_data_length = pixel_count * 4;
+    uint16_t pixel_data_length = (pixel_count + 2) * 4;
     uint8_t pixels_data[pixel_data_length];
-    uint32_t pixel_data = get_dotstar_pixel_data(brightness, red, green, blue);
+    uint32_t pixel_data = format_dotstar_pixel_data(brightness, red, green, blue);
+    printf("Pixel data: %02x\n", pixel_data);
     for (size_t i = 0; i < pixel_data_length; i++){
-        pixels_data[i] = pixel_data >> (i % 4) * 8;
+        if(i < LED_FRAME_LENGTH || i >= (pixel_count + 1) * LED_FRAME_LENGTH){
+            pixels_data[i] = 0;
+            continue;
+        }
+        pixels_data[i] = pixel_data >> (i % LED_FRAME_LENGTH) * 8;
     }
     write_to_spi(pixels_data, pixel_data_length);
 }
@@ -185,30 +215,19 @@ int main(){
     set_pca9685_pin(TB6612FNG_IN1, clockwise);
     set_pca9685_pin(TB6612FNG_IN2, !clockwise);
 
-    // set_all_dotstar_pixels(6, 0xFF, 0xFF, 0xFF);
-
-    uint32_t pixel_data = get_dotstar_pixel_data(8 | 0xE0, 0xFF, 0xFF, 0xFF);
-    uint8_t pixel_buffer[4];
-    pixel_buffer[0] = pixel_data;
-    pixel_buffer[1] = pixel_data >> 8;
-    pixel_buffer[2] = pixel_data >> 16;
-    pixel_buffer[3] = pixel_data >> 24;
-
-    write_to_spi(pixel_buffer, 4);
-
-    uint8_t index = 0;
-    uint8_t register_offset = 0x26;
-
     bool light_status = false;
+    bool ascending = true;
+    uint8_t brightness = 0x1;
 
     while (true) {
-        uint8_t register_index = register_offset + index;
-        uint8_t register_value = read_pca9685_reg(register_index);
-        printf("Register %02x: %02x\n", register_index, register_value);
+        if(ascending) brightness++;
+        else brightness--;
 
-        index++;
-        index %= 4;
+        if(brightness >= 5 || brightness <= 1) ascending ^= true;
 
+        set_all_dotstar_pixels(brightness, 0x0, 0xFF, 0x0);
+
+        // Blink
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
         light_status ^= true;
 
