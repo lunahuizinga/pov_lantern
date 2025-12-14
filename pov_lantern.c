@@ -107,20 +107,21 @@ void write_to_spi(const uint8_t *src, size_t len){
 }
 
 uint32_t format_dotstar_pixel_data(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
-    return ((((uint32_t) brightness) & 0x1F) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
+    return ((((uint32_t) brightness) & 0x1Fu) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
 }
 
-void set_dotstar_pixel(uint8_t index, uint32_t pixel_data){
-    dotstar_pixel_data[index * LED_FRAME_LENGTH] = pixel_data;
-    dotstar_pixel_data[index * LED_FRAME_LENGTH + 1] = pixel_data >> 8;
-    dotstar_pixel_data[index * LED_FRAME_LENGTH + 2] = pixel_data >> 16;
-    dotstar_pixel_data[index * LED_FRAME_LENGTH + 3] = pixel_data >> 24;
+void set_dotstar_pixel(uint8_t pixel_index, uint32_t pixel_data){
+    for (size_t i = 0; i < LED_FRAME_LENGTH; i++){
+        uint8_t pixel_blip = (uint8_t) (pixel_data >> (i * 8));
+        dotstar_pixel_data[pixel_index * LED_FRAME_LENGTH + i] = pixel_blip;
+    }
 }
 
 void push_dotstar_pixels(){
     uint8_t pixel_count = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
-    uint16_t pixel_data_length = (pixel_count + 2) * 4;
+    uint16_t pixel_data_length = (pixel_count + 2) * LED_FRAME_LENGTH;
     uint8_t pixel_data[pixel_data_length];
+
     for (size_t i = 0; i < pixel_data_length; i++){
         if(i < LED_FRAME_LENGTH || i >= (pixel_count + 1) * LED_FRAME_LENGTH){
             pixel_data[i] = 0;
@@ -128,23 +129,27 @@ void push_dotstar_pixels(){
         }
         pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
     }
+    
+    printf("---- START ----\n");
+    for (size_t i = 0; i < pixel_data_length; i++){
+        printf("Pixel data (%02x): %02x\n", i, pixel_data[i]);
+    }
+    printf("---- END ----\n");
+    
     write_to_spi(pixel_data, pixel_data_length);
 }
 
 void set_all_dotstar_pixels(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
     uint8_t pixel_count = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
-    uint16_t pixel_data_length = (pixel_count + 2) * 4;
-    uint8_t pixels_data[pixel_data_length];
     uint32_t pixel_data = format_dotstar_pixel_data(brightness, red, green, blue);
-    printf("Pixel data: %02x\n", pixel_data);
-    for (size_t i = 0; i < pixel_data_length; i++){
-        if(i < LED_FRAME_LENGTH || i >= (pixel_count + 1) * LED_FRAME_LENGTH){
-            pixels_data[i] = 0;
-            continue;
-        }
-        pixels_data[i] = pixel_data >> (i % LED_FRAME_LENGTH) * 8;
+
+    printf("FORMATTED DATA: %02x\n", pixel_data);
+
+    for (int i = 0; i < pixel_count; ++i){
+        set_dotstar_pixel(i, pixel_data);
     }
-    write_to_spi(pixels_data, pixel_data_length);
+
+    push_dotstar_pixels();
 }
 
 void setup_pca9685(){
@@ -166,6 +171,66 @@ void setup_pca9685(){
     new_mode = new_mode | mode1_settings;
     // Write the register back
     set_pca9685_reg(PCA9685_MODE1, new_mode);
+}
+
+void write_dotstar(){
+    uint8_t pixel_amount = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
+    uint16_t pixel_data_length = (pixel_amount + 2) * LED_FRAME_LENGTH;
+    uint8_t pixel_data[pixel_data_length];
+
+    for (size_t i = 0; i < pixel_data_length; i++){
+        if(i < LED_FRAME_LENGTH || i >= (pixel_amount + 1) * LED_FRAME_LENGTH){
+            pixel_data[i] = (uint8_t) 0x0u;
+            continue;
+        }
+
+        pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
+    }
+
+    printf("---- START ----\n");
+    for (size_t i = 0; i < pixel_data_length; i++){
+        printf("Pixel data (%02x): %02x\n", i, pixel_data[i]);
+    }
+    printf("---- END ----\n");
+    
+    write_to_spi(pixel_data, pixel_data_length);
+}
+
+void test_method(){
+    uint32_t blank = format_dotstar_pixel_data(0x1, 0x1, 0x1, 0x1);
+    uint32_t colour_data = format_dotstar_pixel_data(0x1, 0x0, 0x0, 0xff);
+    for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
+        if(i == 4 || i == 5){ 
+            set_dotstar_pixel(i, colour_data);
+            continue;
+        }
+        set_dotstar_pixel(i, blank);
+    }
+    
+    set_dotstar_pixel(0, colour_data);
+    set_dotstar_pixel(1, colour_data);
+
+    // printf("Pixel data: %02x\n", colour_data);
+    
+    uint8_t buffer[4 * 4];
+    buffer[0] = 0;
+    buffer[1] = 0;
+    buffer[2] = 0;
+    buffer[3] = 0;
+    buffer[4] = dotstar_pixel_data[0];      // RED
+    buffer[5] = dotstar_pixel_data[1];      // GREEN
+    buffer[6] = dotstar_pixel_data[2];      // BLUE
+    buffer[7] = dotstar_pixel_data[3];      // BRIGHTNESS
+    buffer[8] = dotstar_pixel_data[4];      // RED
+    buffer[9] = dotstar_pixel_data[5];      // GREEN
+    buffer[10] = dotstar_pixel_data[6];     // BLUE
+    buffer[11] = dotstar_pixel_data[7];     // BRIGHTNESS
+    buffer[12] = 0;
+    buffer[13] = 0;
+    buffer[14] = 0;
+    buffer[15] = 0;
+
+    write_dotstar();
 }
 
 int main(){
@@ -225,7 +290,8 @@ int main(){
 
         if(brightness >= 5 || brightness <= 1) ascending ^= true;
 
-        set_all_dotstar_pixels(brightness, 0x0, 0xFF, 0x0);
+        // set_all_dotstar_pixels(0x1, 0xFF, 0x0, 0x0);
+        test_method();
 
         // Blink
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
