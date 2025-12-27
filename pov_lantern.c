@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
 #include "hardware/i2c.h"
@@ -107,7 +108,7 @@ void write_to_spi(const uint8_t *src, size_t len){
 }
 
 uint32_t format_dotstar_pixel_data(uint8_t brightness, uint8_t red, uint8_t green, uint8_t blue){
-    return ((((uint32_t) brightness) & 0x1Fu) << 24) | (((uint32_t) blue) << 16) | (((uint32_t) green) << 8) | ((uint32_t) red);
+    return (((((uint32_t) brightness) & 0x1Fu) | 0xE0u)) | (((uint32_t) blue) << 8) | (((uint32_t) green) << 16) | ((uint32_t) red << 24);
 }
 
 void set_dotstar_pixel(uint8_t pixel_index, uint32_t pixel_data){
@@ -124,15 +125,19 @@ void push_dotstar_pixels(){
 
     for (size_t i = 0; i < pixel_data_length; i++){
         if(i < LED_FRAME_LENGTH || i >= (pixel_count + 1) * LED_FRAME_LENGTH){
-            pixel_data[i] = 0;
+            pixel_data[i] = 0x0u;
             continue;
         }
         pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
     }
     
     printf("---- START ----\n");
+    int pixel_counter = 0;
     for (size_t i = 0; i < pixel_data_length; i++){
-        printf("Pixel data (%02x): %02x\n", i, pixel_data[i]);
+        if(i % LED_FRAME_LENGTH == 0){
+            printf("--- PIXEL %02x <\n", pixel_counter++);
+        }
+        printf("  Pixel data (%02x): %02x\n", i, pixel_data[i]);
     }
     printf("---- END ----\n");
     
@@ -173,64 +178,42 @@ void setup_pca9685(){
     set_pca9685_reg(PCA9685_MODE1, new_mode);
 }
 
-void write_dotstar(){
-    uint8_t pixel_amount = DOTSTAR_HEIGHT * DOTSTAR_WIDTH;
-    uint16_t pixel_data_length = (pixel_amount + 2) * LED_FRAME_LENGTH;
-    uint8_t pixel_data[pixel_data_length];
+static void hsv2rgb(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b){
+    unsigned char region, remainder;
+    unsigned short p, q, t;
 
-    for (size_t i = 0; i < pixel_data_length; i++){
-        if(i < LED_FRAME_LENGTH || i >= (pixel_amount + 1) * LED_FRAME_LENGTH){
-            pixel_data[i] = (uint8_t) 0x0u;
-            continue;
-        }
-
-        pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
+    if (s == 0) {                 /* achromatic (grey) */
+        *r = *g = *b = v;
+        return;
     }
 
-    printf("---- START ----\n");
-    for (size_t i = 0; i < pixel_data_length; i++){
-        printf("Pixel data (%02x): %02x\n", i, pixel_data[i]);
+    /* Hue is divided into six 60° sectors (0‑5).  Multiply by 6
+       because we work in the 0‑255 range: 256 / 6 ≈ 42.666. */
+    region   = h / 43;            /* 0‑5 */
+    remainder = (h - (region * 43)) * 6;   /* 0‑255 */
+
+    /* Compute intermediate values.
+       All calculations stay in the 0‑255 range. */
+    p = (v * (255 - s)) >> 8;                 /* = v * (1‑s)   */
+    q = (v * (255 - ((s * remainder) >> 8))) >> 8;
+    t = (v * (255 - ((s * (255 - remainder)) >> 8))) >> 8;
+
+    switch (region) {
+        case 0: *r = v; *g = t; *b = p; break;   /* Red → Yellow */
+        case 1: *r = q; *g = v; *b = p; break;   /* Yellow → Green */
+        case 2: *r = p; *g = v; *b = t; break;   /* Green → Cyan   */
+        case 3: *r = p; *g = q; *b = v; break;   /* Cyan → Blue    */
+        case 4: *r = t; *g = p; *b = v; break;   /* Blue → Magenta*/
+        default:*r = v; *g = p; *b = q; break;   /* Magenta → Red */
     }
-    printf("---- END ----\n");
-    
-    write_to_spi(pixel_data, pixel_data_length);
 }
 
-void test_method(){
-    uint32_t blank = format_dotstar_pixel_data(0x1, 0x1, 0x1, 0x1);
-    uint32_t colour_data = format_dotstar_pixel_data(0x1, 0x0, 0x0, 0xff);
-    for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
-        if(i == 4 || i == 5){ 
-            set_dotstar_pixel(i, colour_data);
-            continue;
-        }
-        set_dotstar_pixel(i, blank);
-    }
-    
-    set_dotstar_pixel(0, colour_data);
-    set_dotstar_pixel(1, colour_data);
-
-    // printf("Pixel data: %02x\n", colour_data);
-    
-    uint8_t buffer[4 * 4];
-    buffer[0] = 0;
-    buffer[1] = 0;
-    buffer[2] = 0;
-    buffer[3] = 0;
-    buffer[4] = dotstar_pixel_data[0];      // RED
-    buffer[5] = dotstar_pixel_data[1];      // GREEN
-    buffer[6] = dotstar_pixel_data[2];      // BLUE
-    buffer[7] = dotstar_pixel_data[3];      // BRIGHTNESS
-    buffer[8] = dotstar_pixel_data[4];      // RED
-    buffer[9] = dotstar_pixel_data[5];      // GREEN
-    buffer[10] = dotstar_pixel_data[6];     // BLUE
-    buffer[11] = dotstar_pixel_data[7];     // BRIGHTNESS
-    buffer[12] = 0;
-    buffer[13] = 0;
-    buffer[14] = 0;
-    buffer[15] = 0;
-
-    write_dotstar();
+static uint32_t format_dotstar_pixel_data_hsv(uint8_t hue, uint8_t saturation, uint8_t value){
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+    hsv2rgb(hue, saturation, value, &r, &g, &b);
+    return format_dotstar_pixel_data(0x1u, r, g, b);
 }
 
 int main(){
@@ -242,8 +225,8 @@ int main(){
         return -1;
     }
 
-    // SPI initialisation. This example will use SPI at 1MHz.
-    spi_init(SPI_PORT, 1000 * 1000);
+    // SPI initialisation. This example will use SPI at 4MHz.
+    spi_init(SPI_PORT, 4 * 1000 * 1000);
     gpio_set_function(PIN_CIPO, GPIO_FUNC_SPI);
     gpio_set_function(PIN_CS,   GPIO_FUNC_SIO);
     gpio_set_function(PIN_SCK,  GPIO_FUNC_SPI);
@@ -284,19 +267,33 @@ int main(){
     bool ascending = true;
     uint8_t brightness = 0x1;
 
+    uint8_t hue = 0;
+
+    const uint8_t delta_time = 10;
+    int loop_clock = 0;
+
     while (true) {
         if(ascending) brightness++;
         else brightness--;
 
-        if(brightness >= 5 || brightness <= 1) ascending ^= true;
+        ascending ^= (brightness >= 5 || brightness <= 1);
 
-        // set_all_dotstar_pixels(0x1, 0xFF, 0x0, 0x0);
-        test_method();
+        hue = (hue + 1) % 255;
 
-        // Blink
-        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
-        light_status ^= true;
+        for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
+            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, 255, 255);
+            set_dotstar_pixel(i, pixel_colour);
+        }
+        
+        push_dotstar_pixels();
 
-        sleep_ms(500);
+        if(loop_clock % 500 == 0){
+            // Blink
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
+            light_status ^= true;
+        }
+
+        sleep_ms(delta_time);
+        loop_clock += delta_time;
     }
 }

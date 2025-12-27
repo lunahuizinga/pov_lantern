@@ -35,7 +35,12 @@ pico_sdk_init()
 
 # Add executable. Default name is the project name, version 0.1
 
-add_executable(pov_lantern pov_lantern.c )
+add_executable(
+        pov_lantern
+        pov_lantern.c
+        apa102.c
+        apa102.h
+)
 
 pico_set_program_name(pov_lantern "pov_lantern")
 pico_set_program_version(pov_lantern "0.1")
@@ -58,7 +63,7 @@ target_link_libraries(pov_lantern
         hardware_spi
         hardware_i2c
         pico_cyw43_arch_none
-        )
+)
 
 pico_add_extra_outputs(pov_lantern)
 
