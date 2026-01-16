@@ -27,6 +27,9 @@
 #define I2C_SCL 21
 #define PCA9685_I2C_ADDR _u(0x60) // Default I2C address for the PCA9685 on the Adafruit DC motor FeatherWing as A5 is shorted high
 // https://www.nxp.com/docs/en/data-sheet/PCA9685.pdf
+#define SHT30_I2C_ADDR _u(0x44) // Default I2C address for the SHT30
+// https://sensirion.com/media/documents/213E6A3B/63A5A569/Datasheet_SHT3x_DIS.pdf
+#define MPR121_I2C_ADDR _u(0x5A)
 
 // PCA9685 registers
 #define LED0_ON_L 0x6
@@ -73,6 +76,17 @@ void set_pca9685_regs(uint8_t start_reg, uint8_t data[]){
     write_to_pca9685(buffer, count_of(buffer), false);
 }
 
+void write_to_mpr121(uint8_t *src, size_t len, bool nostop){
+    write_to_i2c(MPR121_I2C_ADDR, src, len, nostop);
+}
+
+void set_mpr121_reg(uint8_t reg, uint8_t data){
+    uint8_t buffer[2];
+    buffer[0] = reg;
+    buffer[1] = data;
+    write_to_mpr121(buffer, count_of(buffer), false);
+}
+
 int read_from_i2c(const uint8_t addr, uint8_t * dst, const size_t len, bool nostop){
     return i2c_read_blocking(I2C_PORT, addr, dst, len, nostop);
 }
@@ -81,10 +95,21 @@ int read_from_pca9685(uint8_t * dst, const size_t len, bool nostop){
     return read_from_i2c(PCA9685_I2C_ADDR, dst, len, false);
 }
 
+int read_from_mpr121(uint8_t * dst, const size_t len){
+    return read_from_i2c(MPR121_I2C_ADDR, dst, len, false);
+}
+
 uint8_t read_pca9685_reg(uint8_t reg){
     uint8_t buffer;
     write_to_pca9685(&reg, 1, true);
     read_from_pca9685(&buffer, 1, false);
+    return buffer;
+}
+
+uint8_t read_mpr121_reg(uint8_t reg){
+    uint8_t buffer;
+    write_to_mpr121(&reg, 1, true);
+    read_from_mpr121(&buffer, 1);
     return buffer;
 }
 
@@ -131,16 +156,6 @@ void push_dotstar_pixels(){
         pixel_data[i] = dotstar_pixel_data[i - LED_FRAME_LENGTH];
     }
     
-    printf("---- START ----\n");
-    int pixel_counter = 0;
-    for (size_t i = 0; i < pixel_data_length; i++){
-        if(i % LED_FRAME_LENGTH == 0){
-            printf("--- PIXEL %02x <\n", pixel_counter++);
-        }
-        printf("  Pixel data (%02x): %02x\n", i, pixel_data[i]);
-    }
-    printf("---- END ----\n");
-    
     write_to_spi(pixel_data, pixel_data_length);
 }
 
@@ -179,8 +194,10 @@ void setup_pca9685(){
 }
 
 static void hsv2rgb(uint8_t h, uint8_t s, uint8_t v, uint8_t *r, uint8_t *g, uint8_t *b){
-    unsigned char region, remainder;
-    unsigned short p, q, t;
+    uint8_t region, remainder;
+    uint16_t p;
+    uint16_t q;
+    uint16_t t;
 
     if (s == 0) {                 /* achromatic (grey) */
         *r = *g = *b = v;
@@ -247,6 +264,11 @@ int main(){
     gpio_pull_up(I2C_SCL);
     // For more examples of I2C use see https://github.com/raspberrypi/pico-examples/tree/master/i2c
 
+    // Initialise pin 22 for the PIR sensor
+    gpio_init(22);
+    gpio_pull_down(22);
+    gpio_set_dir(22, GPIO_IN);
+
     // Example to turn on the Pico W LED
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, 1);
 
@@ -255,7 +277,7 @@ int main(){
     bool clockwise = true;
 
     // Our main PWM
-    set_pca9685_pwm(TB6612FNG_PWM, 0, 495);
+    set_pca9685_pwm(TB6612FNG_PWM, 0, 4095);
     
     // IN1 IN2  EFFECT
     // L   H    CCW
@@ -263,37 +285,39 @@ int main(){
     set_pca9685_pin(TB6612FNG_IN1, clockwise);
     set_pca9685_pin(TB6612FNG_IN2, !clockwise);
 
-    bool light_status = false;
-    bool ascending = true;
-    uint8_t brightness = 0x1;
+    // Set the touch sensitivity
+    set_mpr121_reg(0x41, 0x10);
+    set_mpr121_reg(0x42, 0x8);
+
+    // Set MPR121 to start mode
+    set_mpr121_reg(0x5E, 0x1);
 
     uint8_t hue = 0;
 
     const uint8_t delta_time = 10;
     int loop_clock = 0;
 
+    bool measurement_started = false;
+
     while (true) {
-        if(ascending) brightness++;
-        else brightness--;
-
-        ascending ^= (brightness >= 5 || brightness <= 1);
-
         hue = (hue + 1) % 255;
 
+        bool pir_status = gpio_get(22);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, pir_status);
+
         for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
-            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, 255, 255);
+            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, 255, pir_status ? 255 : 1);
             set_dotstar_pixel(i, pixel_colour);
         }
         
         push_dotstar_pixels();
 
-        if(loop_clock % 500 == 0){
-            // Blink
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, light_status);
-            light_status ^= true;
-        }
+        uint8_t buffer;
+        int return_value;
+
+        buffer = read_mpr121_reg(0x0);
+        printf("%02x\n", buffer);
 
         sleep_ms(delta_time);
-        loop_clock += delta_time;
     }
 }
