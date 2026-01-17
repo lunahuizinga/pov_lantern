@@ -299,8 +299,10 @@ int main(){
     // Constants
     const uint8_t delta_time = 10;
     const uint16_t motor_pwm_on_amount = 2047;
+    const int motor_pwm_change_speed = 30;
     const int on_time = 5000;
     const int lerp_time = 2000;
+    const int flash_interval = 100;
 
     // Variables
     int counter = 0;
@@ -309,8 +311,9 @@ int main(){
 
     bool motor_status = false;
     int32_t motor_pwm_amount = 0;
-    const int motor_pwm_change_speed = 30;
     bool last_cap_status = false;
+    int flash_timer = 0;
+    bool flashing_light = false;
 
     bool status = false;
 
@@ -318,7 +321,8 @@ int main(){
     while (true) {
         // Get sensor data
         bool pir_status = gpio_get(22);
-        bool cap_status = read_mpr121_reg(0x0) & 0b1 == 0b1;
+        uint8_t register_out = read_mpr121_reg(0x0);
+        bool cap_status = register_out & 0b1 == 0b1;
 
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, pir_status);
 
@@ -329,8 +333,9 @@ int main(){
             motor_status = true;
         }
 
+        // Capacitive sensor detection
         if (cap_status && !last_cap_status){
-            saturation = (saturation + 16) % 255;
+            hue = (hue + 64) % 255;
             last_cap_status = true;
         }
 
@@ -342,6 +347,13 @@ int main(){
             motor_status = false;
         } else counter -= delta_time;
 
+        if (flash_timer >= flash_interval) {
+            flashing_light ^= true;
+
+            flash_timer = 0;
+        } else flash_timer += delta_time;
+
+        // Gradual motor switching
         if ((motor_status && motor_pwm_amount < motor_pwm_on_amount) || (!motor_status && motor_pwm_amount > 0)){
             if (motor_status) motor_pwm_amount += motor_pwm_change_speed;
             else motor_pwm_amount -= motor_pwm_change_speed;
@@ -353,16 +365,20 @@ int main(){
             set_pca9685_pwm(TB6612FNG_PWM, 0, motor_pwm_amount);
         }
 
-        hue = (hue + 1) % 255;
+        // Cool hue rainbow effect
+        saturation = (saturation + 1) % 255;
 
         for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
-            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, saturation, status ? 255 : 1);
+            uint32_t pixel_colour = format_dotstar_pixel_data_hsv(hue, status ? (flashing_light ? 255 : 1) : (saturation + i * 30) % 255, status ? 255 : 16);
             set_dotstar_pixel(i, pixel_colour);
         }
         
+        // Send to panel
         push_dotstar_pixels();
 
-        printf("%02x\n", (uint16_t) .5f * 240);
+        uint8_t sanity_check = read_mpr121_reg(0x42);
+
+        printf("%02x\n", counter);
 
         sleep_ms(delta_time);
     }
