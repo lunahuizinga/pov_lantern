@@ -233,6 +233,10 @@ static uint32_t format_dotstar_pixel_data_hsv(uint8_t hue, uint8_t saturation, u
     return format_dotstar_pixel_data(0x1u, r, g, b);
 }
 
+static float lerp(float a, float b, float t){
+    return a + (b - a) * t;
+}
+
 int main(){
     stdio_init_all();
 
@@ -277,7 +281,7 @@ int main(){
     bool clockwise = true;
 
     // Our main PWM
-    set_pca9685_pwm(TB6612FNG_PWM, 0, 4095);
+    set_pca9685_pwm(TB6612FNG_PWM, 0, 0);
     
     // IN1 IN2  EFFECT
     // L   H    CCW
@@ -292,31 +296,73 @@ int main(){
     // Set MPR121 to start mode
     set_mpr121_reg(0x5E, 0x1);
 
-    uint8_t hue = 0;
-
+    // Constants
     const uint8_t delta_time = 10;
-    int loop_clock = 0;
+    const uint16_t motor_pwm_on_amount = 2047;
+    const int on_time = 5000;
+    const int lerp_time = 2000;
 
-    bool measurement_started = false;
+    // Variables
+    int counter = 0;
+    uint8_t hue = 0;
+    uint8_t saturation = 254;
 
+    bool motor_status = false;
+    int32_t motor_pwm_amount = 0;
+    const int motor_pwm_change_speed = 30;
+    bool last_cap_status = false;
+
+    bool status = false;
+
+    // Main loop
     while (true) {
-        hue = (hue + 1) % 255;
-
+        // Get sensor data
         bool pir_status = gpio_get(22);
+        bool cap_status = read_mpr121_reg(0x0) & 0b1 == 0b1;
+
         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, pir_status);
 
+        if (pir_status){
+            counter = on_time;
+            status = true;
+
+            motor_status = true;
+        }
+
+        if (cap_status && !last_cap_status){
+            saturation = (saturation + 16) % 255;
+            last_cap_status = true;
+        }
+
+        if (!cap_status && last_cap_status) last_cap_status = false;
+
+        if (counter <= 0) {
+            status = false;
+
+            motor_status = false;
+        } else counter -= delta_time;
+
+        if ((motor_status && motor_pwm_amount < motor_pwm_on_amount) || (!motor_status && motor_pwm_amount > 0)){
+            if (motor_status) motor_pwm_amount += motor_pwm_change_speed;
+            else motor_pwm_amount -= motor_pwm_change_speed;
+
+            // Clamp
+            if (motor_pwm_amount > motor_pwm_on_amount) motor_pwm_amount = motor_pwm_on_amount;
+            else if (motor_pwm_amount < 0) motor_pwm_amount = 0;
+
+            set_pca9685_pwm(TB6612FNG_PWM, 0, motor_pwm_amount);
+        }
+
+        hue = (hue + 1) % 255;
+
         for (size_t i = 0; i < DOTSTAR_HEIGHT * DOTSTAR_WIDTH; i++){
-            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, 255, pir_status ? 255 : 1);
+            uint32_t pixel_colour = format_dotstar_pixel_data_hsv((hue + i * 30) % 255, saturation, status ? 255 : 1);
             set_dotstar_pixel(i, pixel_colour);
         }
         
         push_dotstar_pixels();
 
-        uint8_t buffer;
-        int return_value;
-
-        buffer = read_mpr121_reg(0x0);
-        printf("%02x\n", buffer);
+        printf("%02x\n", (uint16_t) .5f * 240);
 
         sleep_ms(delta_time);
     }
